@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use ggez::{
     Context,
     GameResult,
-    graphics::{ self, Image, DrawParam, Rect },
+    graphics::{ self, Image, DrawParam, Rect, spritebatch::SpriteBatch },
     event::{ self, EventHandler, KeyCode },
     timer,
     nalgebra::Point2,
@@ -43,9 +43,10 @@ impl<T> Size<T> {
 
 struct MainState {
     map:            Map,
-    tileset_images: HashMap<String, Image>,
+    //tileset_images: HashMap<String, Image>,
     camera:         Point2<f32>,
     keys_down:      Vec<KeyCode>,
+    spritebatchs:   HashMap<String, SpriteBatch>,
 }
 
 impl MainState {
@@ -54,18 +55,21 @@ impl MainState {
             Path::new("resources/map_two.tmx")
         ).unwrap();
 
-        let mut tileset_images = HashMap::new();
+        //let mut tileset_images = HashMap::new();
+        let mut spritebatchs = HashMap::new();
         for tileset in &map.tilesets {
             let path = format!("/{}", tileset.images[0].source);
             let image = Image::new(ctx, &path)?;
-            tileset_images.insert(tileset.name.clone(), image);
+            spritebatchs.insert(tileset.name.clone(), SpriteBatch::new(image));
+            //tileset_images.insert(tileset.name.clone(), image);
         }
 
         Ok(Self {
             map,
-            tileset_images,
-            camera:    Point2::new(0.0, 0.0),
-            keys_down: Vec::new(),
+            //tileset_images,
+            camera:       Point2::new(0.0, 0.0),
+            keys_down:    Vec::new(),
+            spritebatchs: spritebatchs,
         })
     }
 
@@ -78,7 +82,7 @@ impl MainState {
         None
     }
 
-    fn draw_tile(&self, ctx: &mut Context, tileset: &Tileset, tile: &Tile, pos: Point2<u32>) -> GameResult {
+    fn draw_tile(&self, ctx: &mut Context, tileset: &Tileset, tile: &Tile, pos: Point2<u32>) -> GameResult<DrawParam> {
         let point = Point2::new(
             (tileset.tile_width * pos.x)  as f32 + self.camera.x,
             (tileset.tile_height * pos.y) as f32 + self.camera.y
@@ -87,9 +91,9 @@ impl MainState {
         let p = DrawParam::new()
             .dest(point)
             .src(rect);
-        let image = self.tileset_images.get(&tileset.name).unwrap();
-        graphics::draw(ctx, image, p);
-        Ok(())
+        // let image = self.tileset_images.get(&tileset.name).unwrap();
+        // graphics::draw(ctx, image, p);
+        Ok((p))
     }
 
     fn rect_for_tile(&self, tileset: &Tileset, tile: &Tile) -> Rect {
@@ -162,19 +166,33 @@ impl EventHandler for MainState {
     fn draw(&mut self, ctx: &mut Context) -> GameResult {
         graphics::clear(ctx, graphics::BLACK);
 
+        let mut params: Vec<(String, DrawParam)> = Vec::new();
         for layer in &self.map.layers {
             for (row, tiles) in layer.tiles.iter().enumerate() {
                 for (col, id) in tiles.iter().enumerate() {
                     if let Some((tileset, tile)) = self.get_tileset_and_tile_by_gid(*id) {
-                        self.draw_tile(
-                            ctx,
-                            &tileset,
-                            &tile,
-                            Point2::new(col as u32, row as u32)
-                        )?;
+                        params.push((
+                                tileset.name.clone(),
+                                self.draw_tile(
+                                    ctx,
+                                    &tileset,
+                                    &tile,
+                                    Point2::new(col as u32, row as u32)
+                                )?)
+                        );
                     }
                 }
             }
+        }
+
+        for (name, param) in params {
+            let batch = self.spritebatchs.get_mut(&name).unwrap();
+            batch.add(param);
+        }
+
+        for batch in self.spritebatchs.values_mut() {
+            graphics::draw(ctx, batch, DrawParam::new())?;
+            batch.clear();
         }
 
         graphics::present(ctx)?;
