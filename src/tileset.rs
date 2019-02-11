@@ -1,43 +1,57 @@
 use ggez::{
     Context,
     GameResult,
-    graphics::{ self, Image, DrawParam, Rect },
+    graphics::{ self, Image, DrawParam, Rect, spritebatch::SpriteBatch, FilterMode },
     nalgebra::Point2,
 };
 
 use crate::Size;
+use crate::Tile;
 
 pub struct Tileset {
-    image:     Image,
-    tile_size: Size<usize>,
+    image_size:  Size<u16>,
+    spritebatch: SpriteBatch,
+    tile_size:   Size<usize>,
+    queued:      usize,
 }
 
 impl Tileset {
     pub fn new(image: Image, tile_size: Size<usize>) -> Self {
+        let image_size = Size::new(image.width(), image.height());
+        let mut spritebatch = SpriteBatch::new(image);
+        spritebatch.set_filter(FilterMode::Nearest);
         Self {
-            image,
+            image_size,
+            spritebatch,
             tile_size,
+            queued: 0,
         }
     }
 
-    pub fn draw(&mut self, ctx: &mut Context) -> GameResult {
-        let p = DrawParam::new()
-            .dest(Point2::new(0.0, 0.0))
-            .src(Rect::new(0.0, 0.0, 0.25, 0.25));
-        graphics::draw(ctx, &self.image, p)
+    pub fn queue_tile(&mut self, ctx: &mut Context, tile: &Tile, offset: &Point2<f32>) {
+        let dest = Point2::new(
+            tile.pos.x + offset.x,
+            tile.pos.y + offset.y
+        );
+        let rect = self.rect_for_n(tile.id);
+        let param = DrawParam::new()
+            .dest(dest)
+            .src(rect);
+        self.spritebatch.add(param);
+        self.queued += 1;
     }
 
-    pub fn draw_n(&mut self, ctx: &mut Context, idx: usize) -> GameResult {
-        let rect = self.rect_for_n(idx);
-        let p = DrawParam::new()
-            .dest(Point2::new(0.0, 0.0))
-            .src(rect);
-        graphics::draw(ctx, &self.image, p)
+    pub fn draw(&mut self, ctx: &mut Context) -> GameResult {
+        if self.queued == 0 { return Ok(()); }
+        graphics::draw(ctx, &self.spritebatch, DrawParam::new())?;
+        self.spritebatch.clear();
+        self.queued = 0;
+        Ok(())
     }
 
     fn rect_for_n(&self, idx: usize) -> Rect {
-        let image_w = self.image.width();
-        let image_h = self.image.height();
+        let image_w = self.image_size.w;
+        let image_h = self.image_size.h;
 
         //let tiles_per_col = image_h as usize / self.tile_size.h;
         let tiles_per_row = image_w as usize / self.tile_size.w;

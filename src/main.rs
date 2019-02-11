@@ -1,31 +1,29 @@
 extern crate ggez;
-extern crate tiled;
+extern crate json;
 
-//mod tileset;
+mod tileset;
 
 use std::env;
 use std::path::{ Path, PathBuf };
 use std::fs::File;
-use std::io::BufReader;
+use std::io::prelude::*;
 use std::collections::HashMap;
 
 use ggez::{
     Context,
     GameResult,
+    GameError,
     graphics::{ self, Image, DrawParam, Rect, spritebatch::SpriteBatch },
     event::{ self, EventHandler, KeyCode },
     timer,
     nalgebra::Point2,
 };
-use tiled::{
-    Map,
-    Tileset,
-    Tile,
-};
+
+use self::tileset::Tileset;
 
 const WINDOW_SIZE: Size<f32> = Size {
-    w: 800.0,
-    h: 600.0,
+    w: 1240.0,
+    h: 800.0,
 };
 
 const STEP: f32 = 8.0;
@@ -41,86 +39,80 @@ impl<T> Size<T> {
     }
 }
 
+pub struct Tile {
+    pub id:      usize,
+    pub pos:     Point2<f32>,
+    pub tileset: String,
+}
+
+impl Tile {
+    pub fn new(id: usize, pos: Point2<f32>, tileset: String) -> Self {
+        Self { id, pos, tileset }
+    }
+}
+
 struct MainState {
-    map:            Map,
-    //tileset_images: HashMap<String, Image>,
     camera:         Point2<f32>,
     keys_down:      Vec<KeyCode>,
-    spritebatchs:   HashMap<String, SpriteBatch>,
+    tilesets:       HashMap<String, Tileset>,
+    tiles:          Vec<Tile>,
 }
 
 impl MainState {
     pub fn new(ctx: &mut Context) -> GameResult<Self> {
-        let map = tiled::parse_file(
-            Path::new("resources/map_two.tmx")
-        ).unwrap();
+        let mut tilesets = HashMap::new();
+        let mut tiles = Vec::new();
 
-        //let mut tileset_images = HashMap::new();
-        let mut spritebatchs = HashMap::new();
-        for tileset in &map.tilesets {
-            let path = format!("/{}", tileset.images[0].source);
-            let image = Image::new(ctx, &path)?;
-            spritebatchs.insert(tileset.name.clone(), SpriteBatch::new(image));
-            //tileset_images.insert(tileset.name.clone(), image);
+        let mut level_file = File::open("resources/map.json")?;
+        let mut json_raw = String::new();
+        level_file.read_to_string(&mut json_raw)?;
+        let json = json::parse(&json_raw).expect("Couldn't parse json data");
+
+        if json.has_key("tilesets") {
+            for (name, data) in json["tilesets"].entries() {
+                let image = Image::new(ctx, format!("/{}", data["image_filename"].as_str().expect("Parse string")))?;
+                let tile_size;
+                if data.has_key("tile_size") {
+                    tile_size = Size::new(
+                        data["tile_size"]["w"].as_usize().expect("Parse usize"),
+                        data["tile_size"]["h"].as_usize().expect("Parse usize")
+                    );
+                } else { return Err(GameError::ResourceLoadError("Tileset JSON doesn't have key `tile_size`".to_string())); }
+                let tileset = Tileset::new(image, tile_size);
+                tilesets.insert(name.to_string(), tileset);
+            }
+        } else { return Err(GameError::ResourceLoadError("JSON file doesn't have key `tilesets`".to_string())); }
+
+        if json.has_key("tiles") {
+            for data in json["tiles"].members() {
+                let id;
+                if data.has_key("id") {
+                    id = data["id"].as_usize().expect("Parse usize");
+                } else { return Err(GameError::ResourceLoadError("Tile JSON doesn't have key `id`".to_string())); }
+                let pos;
+                if data.has_key("pos") {
+                    pos = Point2::new(
+                        data["pos"]["x"].as_f32().expect("Parse f32"),
+                        data["pos"]["y"].as_f32().expect("Parse f32")
+                    );
+                } else { return Err(GameError::ResourceLoadError("Tile JSON doesn't have key `pos`".to_string())); }
+                let tileset;
+                if data.has_key("tileset") {
+                    tileset = data["tileset"].as_str().expect("Parse usize");
+                } else { return Err(GameError::ResourceLoadError("Tile JSON doesn't have key `tileset`".to_string())); }
+                let tile = Tile::new(id, pos, tileset.to_string());
+                tiles.push(tile);
+            }
+        } else {
+            return Err(GameError::ResourceLoadError("JSON file doesn't have key `tiles`".to_string()));
         }
 
         Ok(Self {
-            map,
-            //tileset_images,
-            camera:       Point2::new(0.0, 0.0),
-            keys_down:    Vec::new(),
-            spritebatchs: spritebatchs,
+            camera:    Point2::new(0.0, 0.0),
+            keys_down: Vec::new(),
+            tilesets,
+            tiles,
         })
-    }
-
-    fn get_tileset_and_tile_by_gid(&self, gid: u32) -> Option<(&Tileset, &Tile)> {
-        for tileset in &self.map.tilesets {
-            if let Some(tile) = tileset.tiles.iter().find( |t| t.id == gid ) {
-                return Some((tileset, tile));
-            }
-        }
-        None
-    }
-
-    fn draw_tile(&self, ctx: &mut Context, tileset: &Tileset, tile: &Tile, pos: Point2<u32>) -> GameResult<DrawParam> {
-        let point = Point2::new(
-            (tileset.tile_width * pos.x)  as f32 + self.camera.x,
-            (tileset.tile_height * pos.y) as f32 + self.camera.y
-        );
-        let rect = self.rect_for_tile(tileset, tile);
-        let p = DrawParam::new()
-            .dest(point)
-            .src(rect);
-        // let image = self.tileset_images.get(&tileset.name).unwrap();
-        // graphics::draw(ctx, image, p);
-        Ok((p))
-    }
-
-    fn rect_for_tile(&self, tileset: &Tileset, tile: &Tile) -> Rect {
-        let image = tileset.images.first().unwrap();
-        let tile_size = Size::new(tileset.tile_width, tileset.tile_height);
-        let id = tile.id;
-
-        let image_w = image.width;
-        let image_h = image.height;
-
-        //let tiles_per_col = image_h as usize / self.tile_size.h;
-        let tiles_per_row = image_w as u32 / tile_size.w;
-
-        let row = id / tiles_per_row;
-        let col = id - row * tiles_per_row;
-
-        let x = tile_size.w as u32 * col;
-        let y = tile_size.h as u32 * row;
-        let w = tile_size.w;
-        let h = tile_size.h;
-
-        let rel_x = x as f32 / image_w as f32;
-        let rel_y = y as f32 / image_h as f32;
-        let rel_w = w as f32 / image_w as f32;
-        let rel_h = h as f32 / image_h as f32;
-
-        Rect::new(rel_x, rel_y, rel_w, rel_h)
     }
 }
 
@@ -153,11 +145,11 @@ impl EventHandler for MainState {
     fn update(&mut self, ctx: &mut Context) -> GameResult {
         for keycode in &self.keys_down {
             match keycode {
-                KeyCode::W      => self.camera.y += STEP,
-                KeyCode::S      => self.camera.y -= STEP,
-                KeyCode::A      => self.camera.x += STEP,
-                KeyCode::D      => self.camera.x -= STEP,
-                _               => (),
+                KeyCode::W => self.camera.y += STEP,
+                KeyCode::S => self.camera.y -= STEP,
+                KeyCode::A => self.camera.x += STEP,
+                KeyCode::D => self.camera.x -= STEP,
+                _          => (),
             }
         }
         Ok(())
@@ -166,33 +158,12 @@ impl EventHandler for MainState {
     fn draw(&mut self, ctx: &mut Context) -> GameResult {
         graphics::clear(ctx, graphics::BLACK);
 
-        let mut params: Vec<(String, DrawParam)> = Vec::new();
-        for layer in &self.map.layers {
-            for (row, tiles) in layer.tiles.iter().enumerate() {
-                for (col, id) in tiles.iter().enumerate() {
-                    if let Some((tileset, tile)) = self.get_tileset_and_tile_by_gid(*id) {
-                        params.push((
-                                tileset.name.clone(),
-                                self.draw_tile(
-                                    ctx,
-                                    &tileset,
-                                    &tile,
-                                    Point2::new(col as u32, row as u32)
-                                )?)
-                        );
-                    }
-                }
-            }
+        for tile in &self.tiles {
+            let tileset = self.tilesets.get_mut(&tile.tileset).expect("Should find `Tileset` for `Tile`");
+            tileset.queue_tile(ctx, tile, &self.camera);
         }
-
-        for (name, param) in params {
-            let batch = self.spritebatchs.get_mut(&name).unwrap();
-            batch.add(param);
-        }
-
-        for batch in self.spritebatchs.values_mut() {
-            graphics::draw(ctx, batch, DrawParam::new())?;
-            batch.clear();
+        for (_name, tileset) in &mut self.tilesets {
+            tileset.draw(ctx)?;
         }
 
         graphics::present(ctx)?;

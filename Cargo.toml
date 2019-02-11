@@ -6,4 +6,5 @@ edition = "2018"
 
 [dependencies]
 ggez = { git = "https://github.com/ggez/ggez" }
-tiled = "*"
+json = "*"
+#tiled = "*"
