@@ -4,6 +4,8 @@ extern crate json;
 mod helpers;
 mod tile;
 mod tileset;
+mod object;
+mod player;
 
 use std::env;
 use std::path::{ Path, PathBuf };
@@ -13,7 +15,10 @@ use std::collections::HashMap;
 use std::time::{ Instant, Duration };
 
 pub use self::helpers::Size;
+pub use self::object::Object;
 pub use self::tile::Tile;
+pub use self::tileset::Tileset;
+use self::player::Player;
 
 use ggez::{
     Context,
@@ -26,14 +31,14 @@ use ggez::{
 };
 
 use self::helpers::*;
-use self::tileset::Tileset;
 
 const WINDOW_SIZE: Size<f32> = Size {
     w: 1240.0,
     h: 800.0,
 };
-const STEP: f32 = 8.0;
-const MAP: &'static str = "map.json";
+const CAMERA_STEP: f32 = 8.0;
+const TILESET_FILENAME: &'static str = "map.ts.json";
+const MAP_FILENAME: &'static str = "map.json";
 const DEBUG_EVERY_MS: u64 = 1000;
 
 struct MainState {
@@ -41,24 +46,40 @@ struct MainState {
     keys_down:      Vec<KeyCode>,
     tilesets:       HashMap<String, Tileset>,
     tiles:          Vec<Tile>,
+    player:         Option<Player>,
+    last_update:    Instant,
     last_debug:     Instant,
 }
 
 impl MainState {
     pub fn new(ctx: &mut Context) -> GameResult<Self> {
-        let mut level_file = File::open(format!("resources/{}", MAP))?;
-        let mut json_raw = String::new();
-        level_file.read_to_string(&mut json_raw)?;
-        let json = json::parse(&json_raw).expect("Couldn't parse json data");
+        let mut ts_file    = File::open(format!("resources/{}", TILESET_FILENAME))?;
+        let mut level_file = File::open(format!("resources/{}", MAP_FILENAME))?;
 
-        let (tilesets, tiles) = load_json(ctx, &json)?;
+        let mut ts_json_raw    = String::new();
+        let mut level_json_raw = String::new();
+
+        ts_file   .read_to_string(&mut ts_json_raw)?;
+        level_file.read_to_string(&mut level_json_raw)?;
+
+        let ts_json    = json::parse(&ts_json_raw).expect("Couldn't parse tileset json data");
+        let level_json = json::parse(&level_json_raw).expect("Couldn't parse level json data");
+
+        let (tilesets, tiles, objects) = load_json(ctx, &ts_json, &level_json)?;
+
+        let mut player = objects.iter().find( |obj| obj.otype == "player" ).map( |obj| Player::from(obj) );
+        if let Some(p) = &mut player {
+            p.init(ctx)?;
+        }
 
         Ok(Self {
-            camera:     Point2::new(0.0, 0.0),
-            keys_down:  Vec::new(),
+            camera:      Point2::new(0.0, 0.0),
+            keys_down:   Vec::new(),
             tilesets,
             tiles,
-            last_debug: Instant::now(),
+            player,
+            last_update: Instant::now(),
+            last_debug:  Instant::now(),
         })
     }
 
@@ -96,20 +117,29 @@ impl EventHandler for MainState {
     }
 
     fn update(&mut self, ctx: &mut Context) -> GameResult {
+        use self::KeyCode::*;
         let now = Instant::now();
         if now - self.last_debug >= Duration::from_millis(DEBUG_EVERY_MS) {
             self.debug(ctx);
         }
 
+        let dt = now.duration_since(self.last_update);
+
+        if let Some(player) = &mut self.player {
+            player.handle_input(&self.keys_down);
+            player.update(ctx, &dt)?;
+        }
+
         for keycode in &self.keys_down {
             match keycode {
-                KeyCode::W => self.camera.y += STEP,
-                KeyCode::S => self.camera.y -= STEP,
-                KeyCode::A => self.camera.x += STEP,
-                KeyCode::D => self.camera.x -= STEP,
-                _          => (),
+                Up    => self.camera.y += CAMERA_STEP,
+                Down  => self.camera.y -= CAMERA_STEP,
+                Left  => self.camera.x += CAMERA_STEP,
+                Right => self.camera.x -= CAMERA_STEP,
+                _     => (),
             }
         }
+        self.last_update = now;
         Ok(())
     }
 
@@ -122,6 +152,9 @@ impl EventHandler for MainState {
         }
         for (_name, tileset) in &mut self.tilesets {
             tileset.draw(ctx)?;
+        }
+        if let Some(player) = &mut self.player {
+            player.draw(ctx)?;
         }
 
         graphics::present(ctx)?;

@@ -1,0 +1,1 @@
+{"tileset": {"image_filename": "tileset.png", "tile_size": {"w": 32, "h": 32}, "properties": {}}, "tileset_64": {"image_filename": "tileset_64.png", "tile_size": {"w": 64, "h": 64}, "properties": {}}, "tileset_2": {"image_filename": "tileset_64.png", "tile_size": {"w": 32, "h": 32}, "properties": {}}}
